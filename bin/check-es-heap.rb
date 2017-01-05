@@ -13,7 +13,8 @@
 #
 # DEPENDENCIES:
 #   gem: sensu-plugin
-#   gem: rest-client
+#   gem: elasticsearch
+#   gem: aws_es_transport
 #
 # USAGE:
 #   example commands
@@ -27,14 +28,24 @@
 #
 
 require 'sensu-plugin/check/cli'
-require 'rest-client'
-require 'json'
-require 'base64'
+require 'elasticsearch'
+require 'aws_es_transport'
+require 'sensu-plugins-elasticsearch'
 
 #
 # ES Heap
 #
 class ESHeap < Sensu::Plugin::Check::CLI
+  include ElasticsearchCommon
+
+  option :transport,
+         long: '--transport TRANSPORT',
+         description: 'Transport to use to communicate with ES. Use "AWS" for signed AWS transports.'
+
+  option :region,
+         long: '--region REGION',
+         description: 'Region (necessary for AWS Transport)'
+
   option :host,
          description: 'Elasticsearch host',
          short: '-h HOST',
@@ -85,53 +96,20 @@ class ESHeap < Sensu::Plugin::Check::CLI
          short: '-W PASS',
          long: '--password PASS'
 
-  option :https,
-         description: 'Enables HTTPS',
-         short: '-e',
-         long: '--https'
-
-  def acquire_es_version
-    info = acquire_es_resource('/')
-    info['version']['number']
-  end
-
-  def acquire_es_resource(resource)
-    headers = {}
-    if config[:user] && config[:password]
-      auth = 'Basic ' + Base64.encode64("#{config[:user]}:#{config[:password]}").chomp
-      headers = { 'Authorization' => auth }
-    end
-
-    protocol = if config[:https]
-                 'https'
-               else
-                 'http'
-               end
-
-    r = RestClient::Resource.new("#{protocol}://#{config[:host]}:#{config[:port]}#{resource}", timeout: config[:timeout], headers: headers)
-    JSON.parse(r.get)
-  rescue Errno::ECONNREFUSED
-    warning 'Connection refused'
-  rescue RestClient::RequestTimeout
-    warning 'Connection timed out'
-  rescue RestClient::ServiceUnavailable
-    warning 'Service is unavailable'
-  rescue JSON::ParserError
-    warning 'Elasticsearch API returned invalid JSON'
-  end
+  option :scheme,
+         description: 'Elasticsearch connection scheme, defaults to https for authenticated connections',
+         short: '-s SCHEME',
+         long: '--scheme SCHEME'
 
   def acquire_heap_data(return_max = false)
-    stats = if Gem::Version.new(acquire_es_version) >= Gem::Version.new('1.0.0')
-              acquire_es_resource('/_nodes/_local/stats')
-            else
-              acquire_es_resource('/_cluster/nodes/_local/stats')
-            end
-    node = stats['nodes'].keys.first
+    options = {}
+
+    stats = client.cluster.stats options
     begin
       if return_max
-        return stats['nodes'][node]['jvm']['mem']['heap_used_in_bytes'], stats['nodes'][node]['jvm']['mem']['heap_max_in_bytes']
+        return stats['nodes']['jvm']['mem']['heap_used_in_bytes'], stats['nodes']['jvm']['mem']['heap_max_in_bytes']
       else
-        stats['nodes'][node]['jvm']['mem']['heap_used_in_bytes']
+        stats['nodes']['jvm']['mem']['heap_used_in_bytes']
       end
     rescue
       warning 'Failed to obtain heap used in bytes'

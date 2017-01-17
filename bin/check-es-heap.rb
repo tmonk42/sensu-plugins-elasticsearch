@@ -3,7 +3,8 @@
 #   check-es-heap
 #
 # DESCRIPTION:
-#   This plugin checks ElasticSearch's Java heap usage using its API.
+#   This plugin checks ElasticSearch's Java heap usage using the
+#     elasticsearch gem
 #
 # OUTPUT:
 #   plain text
@@ -46,6 +47,10 @@ class ESHeap < Sensu::Plugin::Check::CLI
          long: '--region REGION',
          description: 'Region (necessary for AWS Transport)'
 
+  option :profile,
+         long: '--profile PROFILE',
+         description: 'AWS Profile (optional for AWS Transport)'
+
   option :host,
          description: 'Elasticsearch host',
          short: '-h HOST',
@@ -67,9 +72,9 @@ class ESHeap < Sensu::Plugin::Check::CLI
          default: 0
 
   option :timeout,
-         description: 'Sets the connection timeout for REST client',
-         short: '-t SECS',
-         long: '--timeout SECS',
+         description: 'Elasticsearch query timeout in seconds',
+         short: '-t TIMEOUT',
+         long: '--timeout TIMEOUT',
          proc: proc(&:to_i),
          default: 30
 
@@ -101,10 +106,15 @@ class ESHeap < Sensu::Plugin::Check::CLI
          short: '-s SCHEME',
          long: '--scheme SCHEME'
 
+  option :debug,
+         description: 'Enable debug output',
+         long: '--debug'
+
   def acquire_heap_data(return_max = false)
     options = {}
 
     stats = client.cluster.stats options
+    puts "DEBUG es_ver: #{stats['nodes']['versions']}\nDEBUG stats.nodes.jvm.mem: #{stats['nodes']['jvm']['mem']}" if config[:debug]
     begin
       if return_max
         return stats['nodes']['jvm']['mem']['heap_used_in_bytes'], stats['nodes']['jvm']['mem']['heap_max_in_bytes']

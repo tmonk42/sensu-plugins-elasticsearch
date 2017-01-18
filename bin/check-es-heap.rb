@@ -18,9 +18,11 @@
 #   gem: aws_es_transport
 #
 # USAGE:
-#   example commands
+#   check-heap.rb --help
 #
 # NOTES:
+#   Tested with ES 0.90.13, 1.7.6, 2.4.3, 5.1.1 via docker,
+#   and 1.5.2 and 2.3.2 via AWS ElasticSearch
 #
 # LICENSE:
 #  Copyright 2012 Sonian, Inc <chefs@sonian.net>

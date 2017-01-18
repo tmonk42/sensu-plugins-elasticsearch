@@ -21,6 +21,8 @@
 #   
 #
 # NOTES:
+#   Tested with ES 1.7.6, 2.4.3, 5.1.1 via docker,
+#   and 1.5.2 and 2.3.2 via AWS ElasticSearch
 #
 # LICENSE:
 #   Author: S. Zachariah Sprackett <zac@sprackett.com>

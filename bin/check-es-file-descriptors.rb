@@ -105,9 +105,8 @@ class ESFileDescriptors < Sensu::Plugin::Check::CLI
          long: '--debug'
 
   def acquire_es_version
-    options = {}
-
-    c_stats = client.cluster.stats options
+    c_stats = client.cluster.stats @options
+    puts "DEBUG es_ver: #{c_stats['nodes']['versions']}" if config[:debug]
     c_stats['nodes']['versions'][0]
   end
 
@@ -116,7 +115,7 @@ class ESFileDescriptors < Sensu::Plugin::Check::CLI
   end
 
   def acquire_open_fds
-    node_stats = client.nodes.stats
+    node_stats = client.nodes.stats @options
     keys = node_stats['nodes'].keys
 
     # we're going to find the node with the highest open FDs
@@ -130,8 +129,8 @@ class ESFileDescriptors < Sensu::Plugin::Check::CLI
   end
 
   def acquire_max_fds
-    node_stats = client.nodes.stats
-    node_info = client.nodes.info
+    node_stats = client.nodes.stats @options
+    node_info = client.nodes.info {timeout=config[:timeout]} # ES1.X doesn't like the 's'
     keys = node_stats['nodes'].keys
 
     my_max = 0
@@ -147,6 +146,9 @@ class ESFileDescriptors < Sensu::Plugin::Check::CLI
   end
 
   def run
+    @options = {}
+    @options[:timeout] = "#{config[:timeout]}s"
+
     open_fds = acquire_open_fds
     max_fds = acquire_max_fds
 

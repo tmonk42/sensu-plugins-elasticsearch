@@ -17,10 +17,11 @@
 #   gem: aws_es_transport
 #
 # USAGE:
-#   Checks against the ElasticSearch api for cluster health using the
-#     elasticsearch gem
+#   check-es-cluster-status.rb --help
 #
 # NOTES:
+#   Tested with ES 1.7.6, 2.4.3, 5.1.1 via docker,
+#   and 1.5.2 and 2.3.2 via AWS ElasticSearch
 #
 # LICENSE:
 #   Brendan Gibat <brendan.gibat@gmail.com>
@@ -47,6 +48,10 @@ class ESClusterHealth < Sensu::Plugin::Check::CLI
          long: '--region REGION',
          description: 'Region (necessary for AWS Transport)'
 
+  option :profile,
+         long: '--profile PROFILE',
+         description: 'AWS Profile (optional for AWS Transport)'
+
   option :host,
          description: 'Elasticsearch host',
          short: '-h HOST',
@@ -54,9 +59,10 @@ class ESClusterHealth < Sensu::Plugin::Check::CLI
          default: 'localhost'
 
   option :level,
-         description: 'Level of detail to check returend information ("cluster", "indices", "shards").',
+         description: 'Level of detail to check returned information ("cluster", "indices", "shards").',
          short: '-l LEVEL',
-         long: '--level LEVEL'
+         long: '--level LEVEL',
+         default: 'cluster'
 
   option :local,
          description: 'Return local information, do not retrieve the state from master node.',
@@ -92,7 +98,18 @@ class ESClusterHealth < Sensu::Plugin::Check::CLI
          proc: proc(&:to_i),
          default: 30
 
+  option :debug,
+         description: 'Enable debug output',
+         long: '--debug'
+
+  def acquire_es_version
+    c_stats = client.cluster.stats {timeout=config[:timeout]}
+    puts "DEBUG es_ver: #{c_stats['nodes']['versions']}" if config[:debug]
+    c_stats['nodes']['versions'][0]
+  end
+
   def run
+    acquire_es_version
     options = {}
     unless config[:level].nil?
       options[:level] = config[:level]
@@ -103,16 +120,20 @@ class ESClusterHealth < Sensu::Plugin::Check::CLI
     unless config[:index].nil?
       options[:index] = config[:index]
     end
+    options[:timeout] = "#{config[:timeout]}s"
+
     health = client.cluster.health options
+    puts "DEBUG health: #{health}" if config[:debug]
+
     case health['status']
     when 'yellow'
-      warning 'Cluster state is Yellow'
+      warning "#{config[:level]} state is Yellow"
     when 'red'
-      critical 'Cluster state is Red'
+      critical "#{config[:level]} state is Red"
     when 'green'
-      ok
+      ok "#{config[:level]} state is green"
     else
-      unknown "Cluster state is in an unknown health: #{health['status']}"
+      unknown "#{config[:level]} state is in an unknown health: #{health['status']}"
     end
   end
 end

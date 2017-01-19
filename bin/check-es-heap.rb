@@ -113,9 +113,7 @@ class ESHeap < Sensu::Plugin::Check::CLI
          long: '--debug'
 
   def acquire_heap_data(return_max = false)
-    options = {}
-
-    stats = client.cluster.stats options
+    stats = client.cluster.stats @options
     puts "DEBUG es_ver: #{stats['nodes']['versions']}\nDEBUG stats.nodes.jvm.mem: #{stats['nodes']['jvm']['mem']}" if config[:debug]
     begin
       if return_max
@@ -129,6 +127,8 @@ class ESHeap < Sensu::Plugin::Check::CLI
   end
 
   def run
+    @options = {}
+    @options[:timeout] = "#{config[:timeout]}s"
     if config[:percentage]
       heap_used, heap_max = acquire_heap_data(true)
       heap_used_ratio = ((100 * heap_used) / heap_max).to_i

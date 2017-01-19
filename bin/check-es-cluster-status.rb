@@ -3,8 +3,8 @@
 #  check-es-cluster-status
 #
 # DESCRIPTION:
-#   This plugin checks the ElasticSearch cluster status, using its API.
-#   Works with ES 0.9x and ES 1.x
+#   This plugin checks the ElasticSearch cluster status, using the
+#     elasticsearch gem
 #
 # OUTPUT:
 #   plain text
@@ -14,12 +14,15 @@
 #
 # DEPENDENCIES:
 #   gem: sensu-plugin
-#   gem: rest-client
+#   gem: elasticsearch
+#   gem: aws_es_transport
 #
 # USAGE:
-#   #YELLOW
+#   check-es-cluster-status.rb --help
 #
 # NOTES:
+#   Tested with ES 1.7.6, 2.4.3, 5.1.1 via docker
+#   Does NOT work with AWS ElasticSearch
 #
 # LICENSE:
 #   Copyright 2012 Sonian, Inc <chefs@sonian.net>
@@ -28,14 +31,28 @@
 #
 
 require 'sensu-plugin/check/cli'
-require 'rest-client'
-require 'json'
-require 'base64'
+require 'elasticsearch'
+require 'aws_es_transport'
+require 'sensu-plugins-elasticsearch'
 
 #
 # ES Cluster Status
 #
 class ESClusterStatus < Sensu::Plugin::Check::CLI
+  include ElasticsearchCommon
+
+  option :transport,
+         long: '--transport TRANSPORT',
+         description: 'Transport to use to communicate with ES. Use "AWS" for signed AWS transports.'
+
+  option :region,
+         long: '--region REGION',
+         description: 'Region (necessary for AWS Transport)'
+
+  option :profile,
+         long: '--profile PROFILE',
+         description: 'AWS Profile (optional for AWS Transport)'
+
   option :host,
          description: 'Elasticsearch host',
          short: '-h HOST',
@@ -56,7 +73,7 @@ class ESClusterStatus < Sensu::Plugin::Check::CLI
          default: false
 
   option :timeout,
-         description: 'Sets the connection timeout for REST client',
+         description: 'Elasticsearch query timeout in seconds',
          short: '-t SECS',
          long: '--timeout SECS',
          proc: proc(&:to_i),
@@ -78,62 +95,50 @@ class ESClusterStatus < Sensu::Plugin::Check::CLI
          short: '-P PASS',
          long: '--password PASS'
 
-  option :https,
-         description: 'Enables HTTPS',
-         short: '-e',
-         long: '--https'
+  option :scheme,
+         description: 'Elasticsearch connection scheme, defaults to https for authenticated connections',
+         short: '-s SCHEME',
+         long: '--scheme SCHEME'
 
-  def get_es_resource(resource)
-    headers = {}
-    if config[:user] && config[:password]
-      auth = 'Basic ' + Base64.encode64("#{config[:user]}:#{config[:password]}").chomp
-      headers = { 'Authorization' => auth }
-    end
-
-    protocol = if config[:https]
-                 'https'
-               else
-                 'http'
-               end
-
-    r = RestClient::Resource.new("#{protocol}://#{config[:host]}:#{config[:port]}#{resource}", timeout: config[:timeout], headers: headers)
-    JSON.parse(r.get)
-  rescue Errno::ECONNREFUSED
-    critical 'Connection refused'
-  rescue RestClient::RequestTimeout
-    critical 'Connection timed out'
-  rescue RestClient::ServiceUnavailable
-    critical 'Service is unavailable'
-  rescue Errno::ECONNRESET
-    critical 'Connection reset by peer'
-  end
+  option :debug,
+         description: 'Enable debug output',
+         long: '--debug'
 
   def acquire_es_version
-    info = get_es_resource('/')
-    info['version']['number']
+    c_stats = client.cluster.stats @options
+    puts "DEBUG es_ver: #{c_stats['nodes']['versions']}" if config[:debug]
+    c_stats['nodes']['versions'][0]
   end
 
   def master?
-    if Gem::Version.new(acquire_es_version) >= Gem::Version.new('1.0.0')
-      master = get_es_resource('/_cluster/state/master_node')['master_node']
-      local = get_es_resource('/_nodes/_local')
-    else
-      master = get_es_resource('/_cluster/state?filter_routing_table=true&filter_metadata=true&filter_indices=true')['master_node']
-      local = get_es_resource('/_cluster/nodes/_local')
-    end
-    local['nodes'].keys.first == master
+    c_state = client.cluster.state @options
+    node_stats = client.nodes.stats @options
+
+    puts "DEBUG master node: #{c_state['master_node']}" if config[:debug]
+    puts "DEBUG this node: #{node_stats['nodes'].keys.first}" if config[:debug]
+    master = c_state['master_node']
+
+    node_stats['nodes'].keys.first == master
   end
 
   def acquire_status
-    health = if config[:status_timeout]
-               get_es_resource("/_cluster/health?wait_for_status=green&timeout=#{config[:status_timeout]}s")
-             else
-               get_es_resource('/_cluster/health')
-             end
-    health['status'].downcase
+    acquire_es_version
+    c_health = client.cluster.health @health_options
+    puts "DEBUG health: #{c_health}" if config[:debug]
+
+    c_health['status'].downcase
   end
 
   def run
+    @options = {}
+    @health_options = {}
+    if config[:status_timeout].nil?
+      @options[:timeout] = "#{config[:timeout]}s"
+    else
+      @health_options[:wait_for_status] = 'green'
+      @options[:timeout] = "#{config[:status_timeout]}s"
+    end
+
     if !config[:master_only] || master?
       case acquire_status
       when 'green'

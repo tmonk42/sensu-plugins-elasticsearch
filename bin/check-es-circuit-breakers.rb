@@ -96,16 +96,20 @@ class ESCircuitBreaker < Sensu::Plugin::Check::CLI
          description: 'Enable debug output',
          long: '--debug'
 
-  def breaker_status
-    options = {}
+  def acquire_es_version
+    c_stats = client.cluster.stats @options
+    puts "DEBUG es_ver: #{c_stats['nodes']['versions']}" if config[:debug]
+    c_stats['nodes']['versions'][0]
+  end
 
-    stats = client.nodes.stats
+  def breaker_status
+    stats = client.nodes.stats @options
 
     breakers = {}
 
-    stats['nodes'].each_pair do |_node, stat|
+    stats['nodes'].each_pair do |node, stat|
       host = config[:host]
-      puts "DEBUG node: #{_node}" if config[:debug]
+      puts "DEBUG node: #{node}" if config[:debug]
       breakers[host] = {}
       breakers[host]['breakers'] = []
       stat.each_pair do |key, val|
@@ -123,6 +127,13 @@ class ESCircuitBreaker < Sensu::Plugin::Check::CLI
   end
 
   def run
+    @options = {}
+    @options[:timeout] = "#{config[:timeout]}s"
+    unless config[:local].nil?
+      @options[:local] = config[:localhost]
+    end
+    acquire_es_version
+
     breakers = breaker_status
     tripped = false
     breakers.each_pair { |_k, v| tripped = true unless v['breakers'].empty? }

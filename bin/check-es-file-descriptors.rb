@@ -18,7 +18,7 @@
 #   gem: aws_es_transport
 #
 # USAGE:
-#   
+#   check-es-file-descriptors.rb --help
 #
 # NOTES:
 #   Tested with ES 1.7.6, 2.4.3, 5.1.1 via docker,
@@ -125,24 +125,24 @@ class ESFileDescriptors < Sensu::Plugin::Check::CLI
       open_fds << node_stats['nodes'][my_key]['process']['open_file_descriptors']
     end
     puts "DEBUG max of open fds: #{open_fds.max}" if config[:debug]
-    return open_fds.max
+    open_fds.max
   end
 
   def acquire_max_fds
     node_stats = client.nodes.stats @options
-    node_info = client.nodes.info {timeout=config[:timeout]} # ES1.X doesn't like the 's'
+    node_info = client.nodes.info
     keys = node_stats['nodes'].keys
 
     my_max = 0
     keys.each do |my_key|
-      if es_version < Gem::Version.new('2.0.0')
-        my_max = node_info['nodes'][my_key]['process']['max_file_descriptors']
-      else
-        my_max = node_stats['nodes'][my_key]['process']['max_file_descriptors']
-      end
+      my_max = if es_version < Gem::Version.new('2.0.0')
+                 node_info['nodes'][my_key]['process']['max_file_descriptors']
+               else
+                 node_stats['nodes'][my_key]['process']['max_file_descriptors']
+               end
     end
     puts "DEBUG max file descriptors: #{my_max}" if config[:debug]
-    return my_max
+    my_max
   end
 
   def run

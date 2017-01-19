@@ -103,13 +103,13 @@ class ESClusterHealth < Sensu::Plugin::Check::CLI
          long: '--debug'
 
   def acquire_es_version
-    c_stats = client.cluster.stats {timeout=config[:timeout]}
+    options = { timeout: "#{config[:timeout]}s" }
+    c_stats = client.cluster.stats options
     puts "DEBUG es_ver: #{c_stats['nodes']['versions']}" if config[:debug]
     c_stats['nodes']['versions'][0]
   end
 
   def run
-    acquire_es_version
     options = {}
     unless config[:level].nil?
       options[:level] = config[:level]
@@ -121,6 +121,7 @@ class ESClusterHealth < Sensu::Plugin::Check::CLI
       options[:index] = config[:index]
     end
     options[:timeout] = "#{config[:timeout]}s"
+    acquire_es_version
 
     health = client.cluster.health options
     puts "DEBUG health: #{health}" if config[:debug]

@@ -2,7 +2,7 @@ lib = File.expand_path('../lib', __FILE__)
 $LOAD_PATH.unshift(lib) unless $LOAD_PATH.include?(lib)
 
 require 'date'
-require_relative 'lib/sensu-plugins-elasticsearch'
+require_relative 'lib/sensu-plugins-elasticsearch/version'
 
 # pvt_key = '~/.ssh/gem-private_key.pem'
 Gem::Specification.new do |s| # rubocop:disable Metrics/BlockLength
@@ -32,9 +32,9 @@ Gem::Specification.new do |s| # rubocop:disable Metrics/BlockLength
   s.test_files             = s.files.grep(%r{^(test|spec|features)/})
   s.version                = SensuPluginsElasticsearch::Version::VER_STRING
 
-  s.add_runtime_dependency 'aws-es-transport', '~> 0.1'
-  s.add_runtime_dependency 'aws-sdk', ['>= 2.1.14', '< 2.5', '~> 2.1']
-  s.add_runtime_dependency 'elasticsearch',     '~> 1.0.14'
+  s.add_runtime_dependency 'aws-es-transport', '~> 1.0'
+  s.add_runtime_dependency 'aws-sdk', ['>= 2.1.14', '~> 2.1']
+  s.add_runtime_dependency 'elasticsearch', ['>= 2.0', '<= 6.0']
   s.add_runtime_dependency 'rest-client', '1.8.0'
   s.add_runtime_dependency 'sensu-plugin', '~> 1.2'
 

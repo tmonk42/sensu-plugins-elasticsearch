@@ -30,7 +30,7 @@
 
 require 'sensu-handler'
 require 'elasticsearch'
-require 'aws_es_transport'
+require 'aws-es-transport'
 require 'sensu-plugins-elasticsearch'
 
 class ESIndexCleanup < Sensu::Handler

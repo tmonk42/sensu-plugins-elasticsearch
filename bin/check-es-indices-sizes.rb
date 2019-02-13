@@ -30,7 +30,7 @@
 
 require 'sensu-plugin/check/cli'
 require 'elasticsearch'
-require 'aws_es_transport'
+require 'aws-es-transport'
 require 'sensu-plugins-elasticsearch'
 
 class ESCheckIndicesSizes < Sensu::Plugin::Check::CLI

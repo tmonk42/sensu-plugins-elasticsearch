@@ -22,7 +22,6 @@
 #
 # NOTES:
 #   Tested with ES 1.7.6, 2.4.3, 5.1.1 via docker
-#   Does NOT work with AWS ElasticSearch
 #
 # LICENSE:
 #   Copyright 2012 Sonian, Inc <chefs@sonian.net>

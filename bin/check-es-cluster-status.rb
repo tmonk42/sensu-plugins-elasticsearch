@@ -141,11 +141,11 @@ class ESClusterStatus < Sensu::Plugin::Check::CLI
     if !config[:master_only] || master?
       case acquire_status
       when 'green'
-        ok 'Cluster is green'
+        ok 'Cluster state is green'
       when 'yellow'
-        warning 'Cluster is yellow'
+        warning 'Cluster state is yellow'
       when 'red'
-        critical 'Cluster is red'
+        critical 'Cluster state is red'
       end
     else
       ok 'Not the master'

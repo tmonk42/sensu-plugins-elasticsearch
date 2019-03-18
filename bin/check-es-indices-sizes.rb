@@ -15,7 +15,7 @@
 # DEPENDENCIES:
 #   gem: sensu-plugin
 #   gem: elasticsearch
-#   gem: aws_es_transport
+#   gem: aws-es-transport
 #
 # USAGE:
 #   ./check-es-indices-sizes.rb -h localhost -p 9200 -m 155000

@@ -14,7 +14,7 @@
 # DEPENDENCIES:
 #   gem: sensu-plugin
 #   gem: elasticsearch
-#   gem: aws_es_transport
+#   gem: aws-es-transport
 #
 # USAGE:
 #   Checks against the ElasticSearch api for cluster health using the

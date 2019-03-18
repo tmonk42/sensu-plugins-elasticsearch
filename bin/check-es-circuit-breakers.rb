@@ -4,8 +4,7 @@
 #
 # DESCRIPTION:
 #   This plugin checks whether the ElasticSearch circuit breakers have been tripped,
-#   using the node stats API.
-#   Works with ES 0.9x and ES 1.x
+#   using the elasticsearch gem
 #
 # OUTPUT:
 #   plain text
@@ -15,12 +14,15 @@
 #
 # DEPENDENCIES:
 #   gem: sensu-plugin
-#   gem: rest-client
+#   gem: elasticsearch
+#   gem: aws-es-transport
 #
 # USAGE:
-#   check-es-circuit-breakers --help
+#   check-es-circuit-breakers.rb --help
 #
 # NOTES:
+#   Tested with ES 1.7.6, 2.4.3, 5.1.1 via docker,
+#   and 1.5.2 and 2.3.2 via AWS ElasticSearch
 #
 # LICENSE:
 #   Copyright 2012 Sonian, Inc <chefs@sonian.net>
@@ -29,11 +31,25 @@
 #
 
 require 'sensu-plugin/check/cli'
-require 'rest-client'
-require 'json'
-require 'base64'
+require 'elasticsearch'
+require 'aws-es-transport'
+require 'sensu-plugins-elasticsearch'
 
 class ESCircuitBreaker < Sensu::Plugin::Check::CLI
+  include ElasticsearchCommon
+
+  option :transport,
+         long: '--transport TRANSPORT',
+         description: 'Transport to use to communicate with ES. Use "AWS" for signed AWS transports.'
+
+  option :region,
+         long: '--region REGION',
+         description: 'Region (necessary for AWS Transport)'
+
+  option :profile,
+         long: '--profile PROFILE',
+         description: 'AWS Profile (optional for AWS Transport)'
+
   option :host,
          description: 'Elasticsearch host',
          short: '-h HOST',
@@ -48,9 +64,9 @@ class ESCircuitBreaker < Sensu::Plugin::Check::CLI
          default: 9200
 
   option :timeout,
-         description: 'Sets the connection timeout for REST client',
-         short: '-t SECS',
-         long: '--timeout SECS',
+         description: 'Elasticsearch query timeout in seconds',
+         short: '-t TIMEOUT',
+         long: '--timeout TIMEOUT',
          proc: proc(&:to_i),
          default: 30
 
@@ -64,14 +80,10 @@ class ESCircuitBreaker < Sensu::Plugin::Check::CLI
          short: '-P PASS',
          long: '--password PASS'
 
-  option :https,
-         description: 'Enables HTTPS',
-         short: '-e',
-         long: '--https'
-
-  option :cert_file,
-         description: 'Cert file to use',
-         long: '--cert-file CERT'
+  option :scheme,
+         description: 'Elasticsearch connection scheme, defaults to https for authenticated connections',
+         short: '-s SCHEME',
+         long: '--scheme SCHEME'
 
   option :localhost,
          description: 'only check local node',
@@ -80,54 +92,30 @@ class ESCircuitBreaker < Sensu::Plugin::Check::CLI
          boolean: true,
          default: false
 
-  def get_es_resource(resource)
-    headers = {}
-    if config[:user] && config[:password]
-      auth = 'Basic ' + Base64.strict_encode64("#{config[:user]}:#{config[:password]}").chomp
-      headers = { 'Authorization' => auth }
-    end
+  option :debug,
+         description: 'Enable debug output',
+         long: '--debug'
 
-    protocol = if config[:https]
-                 'https'
-               else
-                 'http'
-               end
-
-    r = if config[:cert_file]
-          RestClient::Resource.new("#{protocol}://#{config[:host]}:#{config[:port]}#{resource}",
-                                   ssl_ca_file: config[:cert_file].to_s,
-                                   timeout: config[:timeout],
-                                   headers: headers)
-        else
-          RestClient::Resource.new("#{protocol}://#{config[:host]}:#{config[:port]}#{resource}",
-                                   timeout: config[:timeout],
-                                   headers: headers)
-        end
-    JSON.parse(r.get)
-  rescue Errno::ECONNREFUSED
-    critical 'Connection refused'
-  rescue RestClient::RequestTimeout
-    critical 'Connection timed out'
-  rescue RestClient::ServiceUnavailable
-    warning 'Service is unavailable'
-  rescue Errno::ECONNRESET
-    critical 'Connection reset by peer'
+  def acquire_es_version
+    c_stats = client.cluster.stats @options
+    puts "DEBUG es_ver: #{c_stats['nodes']['versions']}" if config[:debug]
+    c_stats['nodes']['versions'][0]
   end
 
   def breaker_status
+    stats = client.nodes.stats @options
+
     breakers = {}
-    status = if config[:localhost]
-               get_es_resource('/_nodes/_local/stats/breaker')
-             else
-               get_es_resource('/_nodes/stats/breaker')
-             end
-    status['nodes'].each_pair do |_node, stat|
-      host = stat['host']
+
+    stats['nodes'].each_pair do |node, stat|
+      host = config[:host]
+      puts "DEBUG node: #{node}" if config[:debug]
       breakers[host] = {}
       breakers[host]['breakers'] = []
       stat.each_pair do |key, val|
         if key == 'breakers'
           val.each_pair do |bk, bv|
+            puts "DEBUG #{bk} #{bv}" if config[:debug]
             if bv['tripped'] != 0
               breakers[host]['breakers'] << bk
             end
@@ -139,6 +127,13 @@ class ESCircuitBreaker < Sensu::Plugin::Check::CLI
   end
 
   def run
+    @options = {}
+    @options[:timeout] = "#{config[:timeout]}s"
+    unless config[:local].nil?
+      @options[:local] = config[:localhost]
+    end
+    acquire_es_version
+
     breakers = breaker_status
     tripped = false
     breakers.each_pair { |_k, v| tripped = true unless v['breakers'].empty? }

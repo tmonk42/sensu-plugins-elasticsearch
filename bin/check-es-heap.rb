@@ -3,7 +3,8 @@
 #   check-es-heap
 #
 # DESCRIPTION:
-#   This plugin checks ElasticSearch's Java heap usage using its API.
+#   This plugin checks ElasticSearch's Java heap usage using the
+#     elasticsearch gem
 #
 # OUTPUT:
 #   plain text
@@ -13,12 +14,15 @@
 #
 # DEPENDENCIES:
 #   gem: sensu-plugin
-#   gem: rest-client
+#   gem: elasticsearch
+#   gem: aws-es-transport
 #
 # USAGE:
-#   example commands
+#   check-heap.rb --help
 #
 # NOTES:
+#   Tested with ES 0.90.13, 1.7.6, 2.4.3, 5.1.1 via docker,
+#   and 1.5.2 and 2.3.2 via AWS ElasticSearch
 #
 # LICENSE:
 #  Copyright 2012 Sonian, Inc <chefs@sonian.net>
@@ -27,14 +31,28 @@
 #
 
 require 'sensu-plugin/check/cli'
-require 'rest-client'
-require 'json'
-require 'base64'
+require 'elasticsearch'
+require 'aws-es-transport'
+require 'sensu-plugins-elasticsearch'
 
 #
 # ES Heap
 #
 class ESHeap < Sensu::Plugin::Check::CLI
+  include ElasticsearchCommon
+
+  option :transport,
+         long: '--transport TRANSPORT',
+         description: 'Transport to use to communicate with ES. Use "AWS" for signed AWS transports.'
+
+  option :region,
+         long: '--region REGION',
+         description: 'Region (necessary for AWS Transport)'
+
+  option :profile,
+         long: '--profile PROFILE',
+         description: 'AWS Profile (optional for AWS Transport)'
+
   option :host,
          description: 'Elasticsearch host',
          short: '-h HOST',
@@ -56,9 +74,9 @@ class ESHeap < Sensu::Plugin::Check::CLI
          default: 0
 
   option :timeout,
-         description: 'Sets the connection timeout for REST client',
-         short: '-t SECS',
-         long: '--timeout SECS',
+         description: 'Elasticsearch query timeout in seconds',
+         short: '-t TIMEOUT',
+         long: '--timeout TIMEOUT',
          proc: proc(&:to_i),
          default: 30
 
@@ -85,121 +103,53 @@ class ESHeap < Sensu::Plugin::Check::CLI
          short: '-W PASS',
          long: '--password PASS'
 
-  option :https,
-         description: 'Enables HTTPS',
-         short: '-e',
-         long: '--https'
+  option :scheme,
+         description: 'Elasticsearch connection scheme, defaults to https for authenticated connections',
+         short: '-s SCHEME',
+         long: '--scheme SCHEME'
 
-  option :cert_file,
-         description: 'Cert file to use',
-         long: '--cert-file CERT'
+  option :debug,
+         description: 'Enable debug output',
+         long: '--debug'
 
-  option :all,
-         description: 'Check all nodes in the ES cluster',
-         short: '-a',
-         long: '--all',
-         default: false
-
-  def acquire_es_version
-    info = acquire_es_resource('/')
-    info['version']['number']
-  end
-
-  def acquire_es_resource(resource)
-    headers = {}
-    if config[:user] && config[:password]
-      auth = 'Basic ' + Base64.strict_encode64("#{config[:user]}:#{config[:password]}").chomp
-      headers = { 'Authorization' => auth }
-    end
-
-    protocol = if config[:https]
-                 'https'
-               else
-                 'http'
-               end
-
-    r = if config[:cert_file]
-          RestClient::Resource.new("#{protocol}://#{config[:host]}:#{config[:port]}#{resource}",
-                                   ssl_ca_file: config[:cert_file].to_s,
-                                   timeout: config[:timeout],
-                                   headers: headers)
-        else
-          RestClient::Resource.new("#{protocol}://#{config[:host]}:#{config[:port]}#{resource}",
-                                   timeout: config[:timeout],
-                                   headers: headers)
-        end
-    JSON.parse(r.get)
-  rescue Errno::ECONNREFUSED
-    warning 'Connection refused'
-  rescue RestClient::RequestTimeout
-    warning 'Connection timed out'
-  rescue RestClient::ServiceUnavailable
-    warning 'Service is unavailable'
-  rescue JSON::ParserError
-    warning 'Elasticsearch API returned invalid JSON'
-  end
-
-  def acquire_stats
-    if Gem::Version.new(acquire_es_version) >= Gem::Version.new('1.0.0')
-      if config[:all]
-        acquire_es_resource('/_nodes/stats')
+  def acquire_heap_data(return_max = false)
+    stats = client.cluster.stats @options
+    puts "DEBUG es_ver: #{stats['nodes']['versions']}\nDEBUG stats.nodes.jvm.mem: #{stats['nodes']['jvm']['mem']}" if config[:debug]
+    begin
+      if return_max
+        return stats['nodes']['jvm']['mem']['heap_used_in_bytes'], stats['nodes']['jvm']['mem']['heap_max_in_bytes']
       else
-        acquire_es_resource('/_nodes/_local/stats')
+        stats['nodes']['jvm']['mem']['heap_used_in_bytes']
       end
-    elsif config[:all]
-      acquire_es_resource('/_cluster/nodes/stats')
-    else
-      acquire_es_resource('/_cluster/nodes/_local/stats')
+    rescue
+      warning 'Failed to obtain heap used in bytes'
     end
-  end
-
-  def acquire_heap_data(node)
-    return node['jvm']['mem']['heap_used_in_bytes'], node['jvm']['mem']['heap_max_in_bytes']
-  rescue StandardError
-    warning 'Failed to obtain heap used in bytes'
-  end
-
-  def acquire_heap_usage(heap_used, heap_max, node_name)
-    if config[:percentage]
-      heap_usage = ((100 * heap_used) / heap_max).to_i
-      output = if config[:all]
-                 "Node #{node_name}: Heap used in bytes #{heap_used} (#{heap_usage}% full)\n"
-               else
-                 "Heap used in bytes #{heap_used} (#{heap_usage}% full)"
-               end
-    else
-      heap_usage = heap_used
-      output = config[:all] ? "Node #{node_name}: Heap used in bytes #{heap_used}\n" : "Heap used in bytes #{heap_used}"
-    end
-    [heap_usage, output]
   end
 
   def run
-    stats = acquire_stats
-    status = { crit: '', warn: '', ok: '' }
-
-    # Check all the nodes in the cluster, alert if any of the nodes have heap usage above thresholds
-    stats['nodes'].each_value do |node|
-      heap_used, heap_max = acquire_heap_data(node)
-      heap_usage, output = acquire_heap_usage(heap_used, heap_max, node['name'])
-      if heap_usage >= config[:crit]
-        status[:crit] += output
-      elsif heap_usage >= config[:warn]
-        status[:warn] += output
-      elsif !config[:all]
-        status[:ok] += output
+    @options = {}
+    @options[:timeout] = "#{config[:timeout]}s"
+    if config[:percentage]
+      heap_used, heap_max = acquire_heap_data(true)
+      heap_used_ratio = ((100 * heap_used) / heap_max).to_i
+      message "Heap used in bytes #{heap_used} (#{heap_used_ratio}% full)"
+      if heap_used_ratio >= config[:crit]
+        critical
+      elsif heap_used_ratio >= config[:warn]
+        warning
+      else
+        ok
       end
-    end
-
-    if !status[:crit].empty?
-      message status[:crit]
-      critical
-    elsif !status[:warn].empty?
-      message status[:warn]
-      warning
     else
-      message status[:ok]
-      ok
+      heap_used = acquire_heap_data(false)
+      message "Heap used in bytes #{heap_used}"
+      if heap_used >= config[:crit]
+        critical
+      elsif heap_used >= config[:warn]
+        warning
+      else
+        ok
+      end
     end
   end
 end

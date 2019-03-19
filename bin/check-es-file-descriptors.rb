@@ -3,7 +3,8 @@
 #   check-es-file-descriptors
 #
 # DESCRIPTION:
-#   This plugin checks the ElasticSearch file descriptor usage, using its API.
+#   This plugin checks the ElasticSearch file descriptor usage, using the
+#     elasticsearch gem
 #
 # OUTPUT:
 #   plain text
@@ -13,12 +14,15 @@
 #
 # DEPENDENCIES:
 #   gem: sensu-plugin
-#   gem: rest-client
+#   gem: elasticsearch
+#   gem: aws-es-transport
 #
 # USAGE:
-#   #YELLOW
+#   check-es-file-descriptors.rb --help
 #
 # NOTES:
+#   Tested with ES 1.7.6, 2.4.3, 5.1.1 via docker,
+#   and 1.5.2 and 2.3.2 via AWS ElasticSearch
 #
 # LICENSE:
 #   Author: S. Zachariah Sprackett <zac@sprackett.com>
@@ -27,14 +31,28 @@
 #
 
 require 'sensu-plugin/check/cli'
-require 'rest-client'
-require 'json'
-require 'base64'
+require 'elasticsearch'
+require 'aws-es-transport'
+require 'sensu-plugins-elasticsearch'
 
 #
 # ES File Descriptiors
 #
 class ESFileDescriptors < Sensu::Plugin::Check::CLI
+  include ElasticsearchCommon
+
+  option :transport,
+         long: '--transport TRANSPORT',
+         description: 'Transport to use to communicate with ES. Use "AWS" for signed AWS transports.'
+
+  option :region,
+         long: '--region REGION',
+         description: 'Region (necessary for AWS Transport)'
+
+  option :profile,
+         long: '--profile PROFILE',
+         description: 'AWS Profile (optional for AWS Transport)'
+
   option :host,
          description: 'Elasticsearch host',
          short: '-h HOST',
@@ -49,7 +67,7 @@ class ESFileDescriptors < Sensu::Plugin::Check::CLI
          default: 9200
 
   option :timeout,
-         description: 'Sets the connection timeout for REST client',
+         description: 'Elasticsearch query timeout in seconds',
          short: '-t SECS',
          long: '--timeout SECS',
          proc: proc(&:to_i),
@@ -77,50 +95,19 @@ class ESFileDescriptors < Sensu::Plugin::Check::CLI
          short: '-P PASS',
          long: '--password PASS'
 
-  option :https,
-         description: 'Enables HTTPS',
-         short: '-e',
-         long: '--https'
+  option :scheme,
+         description: 'Elasticsearch connection scheme, defaults to https for authenticated connections',
+         short: '-s SCHEME',
+         long: '--scheme SCHEME'
 
-  option :cert_file,
-         description: 'Cert file to use',
-         long: '--cert-file CERT'
-
-  def get_es_resource(resource)
-    headers = {}
-    if config[:user] && config[:password]
-      auth = 'Basic ' + Base64.strict_encode64("#{config[:user]}:#{config[:password]}").chomp
-      headers = { 'Authorization' => auth }
-    end
-
-    protocol = if config[:https]
-                 'https'
-               else
-                 'http'
-               end
-
-    r = if config[:cert_file]
-          RestClient::Resource.new("#{protocol}://#{config[:host]}:#{config[:port]}#{resource}",
-                                   ssl_ca_file: config[:cert_file].to_s,
-                                   timeout: config[:timeout],
-                                   headers: headers)
-        else
-          RestClient::Resource.new("#{protocol}://#{config[:host]}:#{config[:port]}#{resource}",
-                                   timeout: config[:timeout],
-                                   headers: headers)
-        end
-    JSON.parse(r.get)
-  rescue Errno::ECONNREFUSED
-    warning 'Connection refused'
-  rescue RestClient::RequestTimeout
-    warning 'Connection timed out'
-  rescue RestClient::ServiceUnavailable
-    warning 'Service is unavailable'
-  end
+  option :debug,
+         description: 'Enable debug output',
+         long: '--debug'
 
   def acquire_es_version
-    info = get_es_resource('/')
-    info['version']['number']
+    c_stats = client.cluster.stats @options
+    puts "DEBUG es_ver: #{c_stats['nodes']['versions']}" if config[:debug]
+    c_stats['nodes']['versions'][0]
   end
 
   def es_version
@@ -128,46 +115,51 @@ class ESFileDescriptors < Sensu::Plugin::Check::CLI
   end
 
   def acquire_open_fds
-    stats = if es_version < Gem::Version.new('5.0.0')
-              get_es_resource('/_nodes/_local/stats?process=true')
-            else
-              get_es_resource('/_nodes/_local/stats/process')
-            end
-    begin
-      keys = stats['nodes'].keys
-      stats['nodes'][keys[0]]['process']['open_file_descriptors'].to_i
-    rescue NoMethodError
-      warning 'Failed to retrieve open_file_descriptors'
+    node_stats = client.nodes.stats @options
+    keys = node_stats['nodes'].keys
+
+    # we're going to find the node with the highest open FDs
+    open_fds = []
+    keys.each do |my_key|
+      puts "DEBUG open file descriptors for #{my_key} #{node_stats['nodes'][my_key]['process']['open_file_descriptors']}" if config[:debug]
+      open_fds << node_stats['nodes'][my_key]['process']['open_file_descriptors']
     end
+    puts "DEBUG max of open fds: #{open_fds.max}" if config[:debug]
+    open_fds.max
   end
 
   def acquire_max_fds
-    info = if es_version < Gem::Version.new('2.0.0')
-             get_es_resource('/_nodes/_local?process=true')
-           elsif es_version < Gem::Version.new('5.0.0')
-             get_es_resource('/_nodes/_local/stats?process=true')
-           else
-             get_es_resource('/_nodes/_local/stats/process')
-           end
-    begin
-      keys = info['nodes'].keys
-      info['nodes'][keys[0]]['process']['max_file_descriptors'].to_i
-    rescue NoMethodError
-      warning 'Failed to retrieve max_file_descriptors'
+    node_stats = client.nodes.stats @options
+    node_info = client.nodes.info
+    keys = node_stats['nodes'].keys
+
+    my_max = 0
+    keys.each do |my_key|
+      my_max = if es_version < Gem::Version.new('2.0.0')
+                 node_info['nodes'][my_key]['process']['max_file_descriptors']
+               else
+                 node_stats['nodes'][my_key]['process']['max_file_descriptors']
+               end
     end
+    puts "DEBUG max file descriptors: #{my_max}" if config[:debug]
+    my_max
   end
 
   def run
-    open = acquire_open_fds
-    max = acquire_max_fds
-    used_percent = ((open.to_f / max.to_f) * 100).to_i
+    @options = {}
+    @options[:timeout] = "#{config[:timeout]}s"
+
+    open_fds = acquire_open_fds
+    max_fds = acquire_max_fds
+
+    used_percent = ((open_fds.to_f / max_fds.to_f) * 100).to_i
 
     if used_percent >= config[:critical]
-      critical "fd usage #{used_percent}% exceeds #{config[:critical]}% (#{open}/#{max})"
+      critical "fd usage #{used_percent}% exceeds #{config[:critical]}% (#{open_fds}/#{max_fds})"
     elsif used_percent >= config[:warning]
-      warning "fd usage #{used_percent}% exceeds #{config[:warning]}% (#{open}/#{max})"
+      warning "fd usage #{used_percent}% exceeds #{config[:warning]}% (#{open_fds}/#{max_fds})"
     else
-      ok "fd usage at #{used_percent}% (#{open}/#{max})"
+      ok "fd usage at #{used_percent}% (#{open_fds}/#{max_fds})"
     end
   end
 end

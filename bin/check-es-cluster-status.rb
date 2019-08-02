@@ -103,6 +103,12 @@ class ESClusterStatus < Sensu::Plugin::Check::CLI
          description: 'Enable debug output',
          long: '--debug'
 
+  option :alert_status,
+         description: 'Only alert when status matches given RED/YELLOW/GREEN or if blank all statuses',
+         long: '--alert-status STATUS',
+         default: '',
+         in: ['RED', 'YELLOW', 'GREEN', '']
+
   def acquire_es_version
     c_stats = client.cluster.stats @options
     puts "DEBUG es_ver: #{c_stats['nodes']['versions']}" if config[:debug]
@@ -141,11 +147,21 @@ class ESClusterStatus < Sensu::Plugin::Check::CLI
     if !config[:master_only] || master?
       case acquire_status
       when 'green'
-        ok 'Cluster state is green'
+        ok 'Cluster status is green'
       when 'yellow'
-        warning 'Cluster state is yellow'
+        if ['YELLOW', ''].include? config[:alert_status]
+          warning 'Cluster status is Yellow'
+        else
+          ok 'Not alerting on yellow'
+        end
       when 'red'
-        critical 'Cluster state is red'
+        if ['RED', ''].include? config[:alert_status]
+          critical 'Cluster status is Red'
+        else
+          ok 'Not alerting on red'
+        end
+      else
+        unknown "Cluster status is unknown: #{acquire_status}"
       end
     else
       ok 'Not the master'

@@ -113,20 +113,20 @@ class ESClusterHealth < Sensu::Plugin::Check::CLI
     case health['status']
     when 'yellow'
       if ['YELLOW', ''].include? config[:alert_status]
-        warning 'Cluster state is Yellow'
+        warning 'Cluster health is Yellow'
       else
         ok 'Not alerting on yellow'
       end
     when 'red'
       if ['RED', ''].include? config[:alert_status]
-        critical 'Cluster state is Red'
+        critical 'Cluster health is Red'
       else
         ok 'Not alerting on red'
       end
     when 'green'
       ok
     else
-      unknown "Cluster state is in an unknown health: #{health['status']}"
+      unknown "Cluster health is in an unknown health: #{health['status']}"
     end
   end
 end
